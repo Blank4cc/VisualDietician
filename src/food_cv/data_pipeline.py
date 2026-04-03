@@ -17,6 +17,7 @@ class DataConfig:
     num_workers: int = 2
     image_size: int = 224
     pin_memory: bool = True
+    download_if_missing: bool = False
 
 
 def build_train_transform(image_size: int) -> transforms.Compose:
@@ -52,9 +53,15 @@ def _resolve_food101_dataset(
     root: Path,
     split: str,
     transform: Callable,
+    download_if_missing: bool,
 ) -> Dataset:
     try:
-        return datasets.Food101(root=str(root), split=split, transform=transform, download=False)
+        return datasets.Food101(
+            root=str(root),
+            split=split,
+            transform=transform,
+            download=download_if_missing,
+        )
     except Exception:
         split_dir = root / "food-101" / split
         if split_dir.exists():
@@ -76,16 +83,19 @@ class Food101DataModule:
             root=self.config.data_root,
             split="train",
             transform=build_train_transform(self.config.image_size),
+            download_if_missing=self.config.download_if_missing,
         )
         val_ds = _resolve_food101_dataset(
             root=self.config.data_root,
             split="test",
             transform=build_eval_transform(self.config.image_size),
+            download_if_missing=False,
         )
         test_ds = _resolve_food101_dataset(
             root=self.config.data_root,
             split="test",
             transform=build_eval_transform(self.config.image_size),
+            download_if_missing=False,
         )
 
         pin_memory = self.config.pin_memory and torch.cuda.is_available()
@@ -112,3 +122,15 @@ class Food101DataModule:
             pin_memory=pin_memory,
         )
         return train_loader, val_loader, test_loader
+
+    def get_class_names(self) -> list[str]:
+        train_ds = _resolve_food101_dataset(
+            root=self.config.data_root,
+            split="train",
+            transform=build_eval_transform(self.config.image_size),
+            download_if_missing=self.config.download_if_missing,
+        )
+        classes = getattr(train_ds, "classes", None)
+        if classes is None:
+            return []
+        return [str(x) for x in classes]

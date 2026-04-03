@@ -14,6 +14,9 @@ class PortionConfig:
     coin_diameter_cm: float = 2.5
     default_weight_g: float = 180.0
     fallback_confidence: float = 0.4
+    min_detection_confidence: float = 0.35
+    max_items: int = 3
+    max_weight_g_per_item: float = 800.0
 
 
 DEFAULT_DENSITY_G_PER_CM2: dict[str, float] = {
@@ -79,14 +82,17 @@ class PortionEstimator:
         ppc = pixel_per_cm if pixel_per_cm else 40.0
         estimations: list[PortionEstimation] = []
         for idx, xyxy in enumerate(boxes.xyxy.tolist()):
+            confidence = float(boxes.conf[idx].item()) if boxes.conf is not None else self.config.fallback_confidence
+            if confidence < self.config.min_detection_confidence:
+                continue
             x1, y1, x2, y2 = xyxy
             bbox_w = max(x2 - x1, 1.0)
             bbox_h = max(y2 - y1, 1.0)
             area_cm2 = (bbox_w / ppc) * (bbox_h / ppc)
             label = candidates[min(idx, len(candidates) - 1)]
             density = self.density_map.get(label, 1.2)
-            weight_g = max(area_cm2 * density, 1.0)
-            confidence = float(boxes.conf[idx].item()) if boxes.conf is not None else self.config.fallback_confidence
+            estimated_weight = max(area_cm2 * density, 1.0)
+            weight_g = min(estimated_weight, self.config.max_weight_g_per_item)
             estimations.append(
                 PortionEstimation(
                     label=label,
@@ -94,4 +100,14 @@ class PortionEstimator:
                     confidence=confidence,
                 )
             )
+            if len(estimations) >= self.config.max_items:
+                break
+        if not estimations:
+            return [
+                PortionEstimation(
+                    label=candidates[0],
+                    weight_g=self.config.default_weight_g,
+                    confidence=self.config.fallback_confidence,
+                )
+            ]
         return estimations

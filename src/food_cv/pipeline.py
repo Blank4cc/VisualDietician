@@ -11,9 +11,14 @@ from .schemas import MealItemResult
 
 
 class MealPredictor:
-    def __init__(self, paths: ProjectPaths, checkpoint_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        paths: ProjectPaths,
+        checkpoint_path: str | Path | None = None,
+        labels: list[str] | None = None,
+    ) -> None:
         model = build_resnet50_classifier(num_classes=101, freeze_backbone=True)
-        self.classifier = FoodClassifier(model=model)
+        self.classifier = FoodClassifier(model=model, labels=labels)
         if checkpoint_path:
             self.classifier.load_checkpoint(checkpoint_path)
         self.portion_estimator = PortionEstimator()

@@ -1,0 +1,62 @@
+[
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\baklava\\788.jpg",
+    "gt_total_calories": 516.0,
+    "gt_total_weight_g": 120.0,
+    "notes": "auto-filled prior GT: baklava (high density dessert); replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\cannoli\\526.jpg",
+    "gt_total_calories": 390.0,
+    "gt_total_weight_g": 130.0,
+    "notes": "auto-filled prior GT: cannoli; replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\ceviche\\904.jpg",
+    "gt_total_calories": 242.0,
+    "gt_total_weight_g": 220.0,
+    "notes": "auto-filled prior GT: ceviche; replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\donuts\\1342.jpg",
+    "gt_total_calories": 429.0,
+    "gt_total_weight_g": 95.0,
+    "notes": "auto-filled prior GT: donuts; replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\gyoza\\13174.jpg",
+    "gt_total_calories": 414.0,
+    "gt_total_weight_g": 180.0,
+    "notes": "auto-filled prior GT: gyoza; replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\hummus\\7045.jpg",
+    "gt_total_calories": 249.0,
+    "gt_total_weight_g": 150.0,
+    "notes": "auto-filled prior GT: hummus; replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\nachos\\7194.jpg",
+    "gt_total_calories": 700.0,
+    "gt_total_weight_g": 250.0,
+    "notes": "auto-filled prior GT: nachos; replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\paella\\4887.jpg",
+    "gt_total_calories": 544.0,
+    "gt_total_weight_g": 320.0,
+    "notes": "auto-filled prior GT: paella; replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\pho\\1002382.jpg",
+    "gt_total_calories": 358.0,
+    "gt_total_weight_g": 550.0,
+    "notes": "auto-filled prior GT: pho; replace with measured value later"
+  },
+  {
+    "image_path": "d:\\CityU\\Projects\\CV_course_project\\food-101\\images\\waffles\\789765.jpg",
+    "gt_total_calories": 491.0,
+    "gt_total_weight_g": 180.0,
+    "notes": "auto-filled prior GT: waffles; replace with measured value later"
+  }
+]

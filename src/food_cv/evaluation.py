@@ -8,6 +8,8 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from .nutrition_engine import NutritionConfig, USDANutritionEngine
+
 
 @torch.no_grad()
 def evaluate_classification_metrics(
@@ -170,3 +172,71 @@ def create_eval_template(
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=2)
     return out_path
+
+
+def auto_fill_eval_samples_from_usda(
+    sample_json_path: str | Path,
+    foundation_dir: str | Path,
+    sr_legacy_dir: str | Path | None = None,
+    default_weight_g: float = 180.0,
+    overwrite_existing_gt: bool = True,
+) -> dict[str, float]:
+    if default_weight_g <= 0:
+        raise ValueError("default_weight_g 必须大于 0")
+    sample_path = Path(sample_json_path)
+    if not sample_path.exists():
+        raise FileNotFoundError(f"评估样本文件不存在: {sample_path}")
+
+    with sample_path.open("r", encoding="utf-8") as f:
+        rows = json.load(f)
+    if not isinstance(rows, list):
+        raise ValueError("评估样本 JSON 顶层必须是 list")
+
+    engine = USDANutritionEngine(
+        NutritionConfig(
+            foundation_dir=Path(foundation_dir),
+            sr_legacy_dir=Path(sr_legacy_dir) if sr_legacy_dir else None,
+        )
+    )
+
+    updated_count = 0
+    skipped_count = 0
+    unresolved_count = 0
+
+    for row in rows:
+        if not isinstance(row, dict):
+            skipped_count += 1
+            continue
+        current_cal = float(row.get("gt_total_calories", 0.0))
+        current_w = float(row.get("gt_total_weight_g", 0.0))
+        if not overwrite_existing_gt and current_cal > 0 and current_w > 0:
+            skipped_count += 1
+            continue
+
+        image_path = Path(str(row.get("image_path", "")))
+        label = image_path.parent.name if image_path.parent.name else ""
+        if not label:
+            skipped_count += 1
+            continue
+
+        nutrition = engine.nutrition_for(label, default_weight_g)
+        if nutrition.calories <= 0:
+            unresolved_count += 1
+            continue
+
+        row["gt_total_calories"] = round(float(nutrition.calories), 3)
+        row["gt_total_weight_g"] = round(float(default_weight_g), 3)
+        note = str(row.get("notes", "")).strip()
+        auto_note = "auto-filled from USDA CSV by class label"
+        row["notes"] = f"{note} | {auto_note}" if note else auto_note
+        updated_count += 1
+
+    with sample_path.open("w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=2)
+
+    return {
+        "total_rows": float(len(rows)),
+        "updated_rows": float(updated_count),
+        "skipped_rows": float(skipped_count),
+        "unresolved_rows": float(unresolved_count),
+    }

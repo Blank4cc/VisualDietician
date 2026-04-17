@@ -9,7 +9,7 @@
 |---|---|
 | Course | EE5811 Topics in Computer Vision |
 | Topic | Food Image Recognition + Calorie Estimation |
-| Stack | Python · PyTorch · OpenCV · YOLO · Food-101 · pandas |
+| Stack | Python · PyTorch · OpenCV · YOLO · Food-101 · USDA CSV · pandas |
 | Team Size | 2–3 persons recommended |
 | Duration | ~8 weeks |
 
@@ -57,12 +57,12 @@
 │                                                                     │
 │  food_category + estimated_weight                                   │
 │       │                                                             │
-│       ├─→ USDA FoodData Central CSV (offline, 本地文件)               │
+│       ├─→ USDA FoodData Central CSV (offline, 本地文件, 方案A)         │
 │       │   food.csv + food_nutrient.csv + nutrient.csv               │
 │       │   启动时一次性 pd.read_csv() 加载到内存                         │
-│       │   OR hardcoded fallback dict (30种常见食物)                   │
+│       │   + Food-101 类别静态映射规则（优先）                          │
 │       │                                                             │
-│       └─→ calories = (cal_per_100g / 100) × weight_g                │
+│       └─→ calories = (cal_per_100g / 100) × weight_g                  │
 │           + protein_g, fat_g, carb_g                                │
 │                                                                     │
 │  OUTPUT: Nutritional breakdown dict per food item                   │
@@ -177,7 +177,7 @@ Input Image
     │
     └──[Module 4]──→ query nutrition DB
                      → pd.DataFrame 本地查询 (food_nutrient.csv)
-                     → fuzzy match food_name → fdc_id → nutrients
+                     → 方案A: Food-101 类别静态映射 → fdc_id → nutrients
                      → {calories, protein, fat, carbs}
                      → render annotated output image
 ```
@@ -196,7 +196,8 @@ Input Image
 |---|---|
 | Classification accuracy | Top-1 / Top-5 on Food-101 test set |
 | Portion estimation error | Compare vs. manual weighing (5–10 test images) |
-| End-to-end calorie error | Compare vs. nutrition label ground truth |
+| Nutrition hit-rate (Scheme A primary) | Ratio of predicted items with non-zero calories after USDA mapping |
+| End-to-end calorie error (optional) | Compare vs. measured GT if available; otherwise proxy GT trend only |
 | Speed | Inference time per image (ms) |
 
 - [ ] Run full evaluation suite
@@ -239,7 +240,7 @@ Phase 2A              Phase 2B
 | 2 | **Food-101 fine-tuning overfitting** — small compute budget | Use transfer learning (freeze backbone), data augmentation, early stopping |
 | 3 | **Mixed-dish ambiguity** — "fried rice" vs "egg fried rice" look identical | Report Top-3 predictions; let user confirm via simple UI toggle |
 | 4 | **Food-101 类名与 USDA 描述不匹配** — 如 "edamame" vs "Edamame, frozen, prepared" | 
-    预处理时构建一个 Food-101→USDA 关键词映射表（约 30 条手写规则即可覆盖大部分） |
+    持续扩展 Food-101→USDA 静态映射表（优先覆盖高频类别，长尾逐步补齐） |
 
 ---
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
 from torchvision.datasets import ImageFolder
 
@@ -18,6 +18,8 @@ class DataConfig:
     image_size: int = 224
     pin_memory: bool = True
     download_if_missing: bool = False
+    val_ratio: float = 0.1
+    split_seed: int = 42
 
 
 def build_train_transform(image_size: int) -> transforms.Compose:
@@ -78,16 +80,18 @@ class Food101DataModule:
             raise ValueError("batch_size 必须为正整数")
         if not self.config.data_root.exists():
             raise FileNotFoundError(f"数据目录不存在: {self.config.data_root}")
+        if not (0.0 < self.config.val_ratio < 1.0):
+            raise ValueError("val_ratio 必须在 (0, 1) 区间内")
 
-        train_ds = _resolve_food101_dataset(
+        train_ds_for_train = _resolve_food101_dataset(
             root=self.config.data_root,
             split="train",
             transform=build_train_transform(self.config.image_size),
             download_if_missing=self.config.download_if_missing,
         )
-        val_ds = _resolve_food101_dataset(
+        train_ds_for_val = _resolve_food101_dataset(
             root=self.config.data_root,
-            split="test",
+            split="train",
             transform=build_eval_transform(self.config.image_size),
             download_if_missing=False,
         )
@@ -97,6 +101,17 @@ class Food101DataModule:
             transform=build_eval_transform(self.config.image_size),
             download_if_missing=False,
         )
+
+        total_train = len(train_ds_for_train)
+        val_size = max(1, int(total_train * self.config.val_ratio))
+        if val_size >= total_train:
+            val_size = total_train - 1
+        generator = torch.Generator().manual_seed(self.config.split_seed)
+        indices = torch.randperm(total_train, generator=generator).tolist()
+        val_indices = indices[:val_size]
+        train_indices = indices[val_size:]
+        train_ds: Dataset = Subset(train_ds_for_train, train_indices)
+        val_ds: Dataset = Subset(train_ds_for_val, val_indices)
 
         pin_memory = self.config.pin_memory and torch.cuda.is_available()
 

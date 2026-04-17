@@ -22,7 +22,12 @@ class MealPredictor:
         if checkpoint_path:
             self.classifier.load_checkpoint(checkpoint_path)
         self.portion_estimator = PortionEstimator()
-        self.nutrition_engine = USDANutritionEngine(NutritionConfig(foundation_dir=paths.foundation_dir))
+        self.nutrition_engine = USDANutritionEngine(
+            NutritionConfig(
+                foundation_dir=paths.foundation_dir,
+                sr_legacy_dir=paths.sr_legacy_dir,
+            )
+        )
 
     def predict_meal(self, image_path: str | Path) -> dict[str, Any]:
         path = Path(image_path)

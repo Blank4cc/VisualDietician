@@ -34,19 +34,32 @@
   - average loss
   - speed
   - ETA
+- Added validation metrics:
+  - Top-1 and Top-5 accuracy in epoch logs and checkpoint metadata
+- Added two-stage fine-tuning pipeline:
+  - Stage 1: frozen backbone training
+  - Stage 2: unfreeze last blocks and fine-tune
 - Added accelerator guard:
   - `require_accelerator=True` fails fast if backend falls back to CPU
 - Added validation fallback path:
   - if DirectML validation triggers `version_counter` runtime error, automatically validate on CPU and resume
 - Replaced eval context from `inference_mode` to `no_grad` for backend compatibility
+- Enhanced nutrition retrieval:
+  - merged USDA Foundation + SR Legacy lookup
+  - added token-overlap candidate search
+  - expanded Food-101 alias mapping and fallback nutrition profiles
+- Added quick evaluation utilities:
+  - sampled test-set Top-1/Top-5/avg_loss reporting after training
+  - end-to-end nutrition nonzero-calorie hit-rate reporting
+- Reduced DirectML optimizer CPU-fallback noise/risk by using `Adam(..., foreach=False)` in training config
 - Added root `.gitignore` and dataset/model artifact exclusions
 
 ## In Progress
 - Running stable smoke-training configuration:
   - batch_size=16
   - num_workers=0
-  - epochs=1
-  - max_steps_per_epoch=120
+  - stage1 epochs=1 / max_steps=60
+  - stage2 epochs=1 / max_steps=60
 - Backend target for local Windows AMD setup:
   - `backend=directml`
 
@@ -65,9 +78,8 @@
 - Expand two-stage fine-tuning:
   - Stage 1: freeze backbone
   - Stage 2: unfreeze last blocks
-- Add Food-101 label to USDA mapping table coverage expansion.
+- Add Food-101 label to USDA mapping table coverage expansion (long tail classes).
 - Add end-to-end evaluation metrics:
-  - Top-1/Top-5 accuracy
   - portion error
   - calorie error
 

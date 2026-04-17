@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from typing import Callable
 
 import torch
 from torch import nn
@@ -24,6 +25,7 @@ class TrainConfig:
     max_steps_per_epoch: int | None = None
     use_amp: bool = True
     require_accelerator: bool = False
+    optimizer_foreach: bool | None = None
 
 
 def _resolve_device(device: str) -> tuple[Any, str]:
@@ -129,6 +131,30 @@ def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device
     return correct / max(total, 1)
 
 
+def evaluate_topk_accuracy(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    k: int,
+) -> float:
+    if k <= 0:
+        raise ValueError("k 必须大于 0")
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            logits = model(x)
+            topk = min(k, logits.shape[1])
+            pred_topk = torch.topk(logits, k=topk, dim=1).indices
+            match = pred_topk.eq(y.view(-1, 1))
+            correct += int(match.any(dim=1).sum().item())
+            total += int(y.numel())
+    return correct / max(total, 1)
+
+
 def train_classifier(
     model: nn.Module,
     train_loader: DataLoader,
@@ -150,8 +176,16 @@ def train_classifier(
     _emit(f"[train] backend={backend} device={device}")
     model.to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam((p for p in model.parameters() if p.requires_grad), lr=cfg.lr)
+    foreach = cfg.optimizer_foreach
+    if foreach is None:
+        foreach = backend != "directml"
+    optimizer = torch.optim.Adam(
+        (p for p in model.parameters() if p.requires_grad),
+        lr=cfg.lr,
+        foreach=foreach,
+    )
     best_acc = 0.0
+    best_top5 = 0.0
     best_loss = float("inf")
 
     for epoch in range(1, cfg.epochs + 1):
@@ -175,13 +209,78 @@ def train_classifier(
             _emit("[train] 验证阶段在当前后端失败，回退到 CPU 验证")
             model.to(torch.device("cpu"))
             val_acc = evaluate_accuracy(model, val_loader, torch.device("cpu"))
+            val_top5 = evaluate_topk_accuracy(model, val_loader, torch.device("cpu"), k=5)
             model.to(device)
-        _emit(f"[train] epoch={epoch}/{cfg.epochs} done train_loss={train_loss:.4f} val_acc={val_acc:.4f}")
+        else:
+            val_top5 = evaluate_topk_accuracy(model, val_loader, device, k=5)
+        _emit(
+            f"[train] epoch={epoch}/{cfg.epochs} done "
+            f"train_loss={train_loss:.4f} val_top1={val_acc:.4f} val_top5={val_top5:.4f}"
+        )
         if val_acc >= best_acc:
             best_acc = val_acc
+            best_top5 = val_top5
             best_loss = min(best_loss, train_loss)
             path = Path(save_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save({"model_state_dict": model.state_dict(), "val_acc": val_acc}, path)
+            torch.save(
+                {"model_state_dict": model.state_dict(), "val_top1": val_acc, "val_top5": val_top5},
+                path,
+            )
 
-    return {"best_val_acc": best_acc, "best_train_loss": best_loss, "backend": backend}
+    return {
+        "best_val_top1": best_acc,
+        "best_val_top5": best_top5,
+        "best_train_loss": best_loss,
+        "backend": backend,
+    }
+
+
+def train_classifier_two_stage(
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    stage1_save_path: str | Path,
+    stage1_config: TrainConfig,
+    stage2_save_path: str | Path | None = None,
+    stage2_config: TrainConfig | None = None,
+    unfreeze_fn: Callable[[nn.Module], None] | None = None,
+) -> dict[str, Any]:
+    _emit("[train] two-stage training: stage1(frozen) start")
+    stage1_metrics = train_classifier(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        save_path=stage1_save_path,
+        config=stage1_config,
+    )
+    _emit("[train] two-stage training: stage1 done")
+
+    if unfreeze_fn is not None:
+        unfreeze_fn(model)
+    _emit("[train] two-stage training: stage2(unfrozen) start")
+    stage2_cfg = stage2_config or TrainConfig(
+        epochs=1,
+        lr=1e-5,
+        device=stage1_config.device,
+        log_every_n_steps=stage1_config.log_every_n_steps,
+        max_steps_per_epoch=stage1_config.max_steps_per_epoch,
+        use_amp=stage1_config.use_amp,
+        require_accelerator=stage1_config.require_accelerator,
+        optimizer_foreach=stage1_config.optimizer_foreach,
+    )
+    stage2_path = Path(stage2_save_path) if stage2_save_path else Path(stage1_save_path).with_name("food101_resnet50_stage2.pt")
+    stage2_metrics = train_classifier(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        save_path=stage2_path,
+        config=stage2_cfg,
+    )
+    _emit("[train] two-stage training: stage2 done")
+    return {
+        "stage1": stage1_metrics,
+        "stage2": stage2_metrics,
+        "stage1_checkpoint": str(Path(stage1_save_path)),
+        "stage2_checkpoint": str(stage2_path),
+    }

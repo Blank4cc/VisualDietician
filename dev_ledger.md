@@ -51,6 +51,8 @@
 - Added quick evaluation utilities:
   - sampled test-set Top-1/Top-5/avg_loss reporting after training
   - end-to-end nutrition nonzero-calorie hit-rate reporting
+  - optional JSON-driven end-to-end MAE/MAPE evaluation for calories and total weight
+  - auto template generator for `eval_samples.json` to bootstrap ground-truth annotation
 - Reduced DirectML optimizer CPU-fallback noise/risk by using `Adam(..., foreach=False)` in training config
 - Added root `.gitignore` and dataset/model artifact exclusions
 
@@ -80,8 +82,8 @@
   - Stage 2: unfreeze last blocks
 - Add Food-101 label to USDA mapping table coverage expansion (long tail classes).
 - Add end-to-end evaluation metrics:
-  - portion error
-  - calorie error
+  - prepare `eval_samples.json` ground-truth file for stable MAE/MAPE tracking
+  - verify two-stage training output contains both `stage1` and `stage2` metrics in notebook
 
 ## Decision Log
 - Keep Food-101 and USDA datasets out of git tracking.

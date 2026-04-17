@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -82,3 +83,90 @@ def evaluate_nutrition_hit_rate(
         "item_count": float(item_count),
         "nonzero_calorie_rate": nonzero_count / item_count,
     }
+
+
+def evaluate_end_to_end_from_json(
+    predictor: Any,
+    sample_json_path: str | Path,
+) -> dict[str, float]:
+    path = Path(sample_json_path)
+    if not path.exists():
+        raise FileNotFoundError(f"评估样本文件不存在: {path}")
+
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    if not isinstance(payload, list):
+        raise ValueError("评估样本 JSON 顶层必须是 list")
+
+    image_count = 0
+    usable_count = 0
+    calorie_abs_error_sum = 0.0
+    calorie_abs_pct_error_sum = 0.0
+    weight_abs_error_sum = 0.0
+    weight_abs_pct_error_sum = 0.0
+
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        image_path = Path(str(row.get("image_path", "")))
+        if not image_path.exists():
+            continue
+        gt_total_calories = float(row.get("gt_total_calories", 0.0))
+        gt_total_weight = float(row.get("gt_total_weight_g", 0.0))
+        pred = predictor.predict_meal(image_path)
+        pred_total_calories = float(pred.get("total", {}).get("calories", 0.0))
+        pred_total_weight = float(sum(float(item.get("weight_g", 0.0)) for item in pred.get("items", [])))
+
+        calorie_abs_error = abs(pred_total_calories - gt_total_calories)
+        weight_abs_error = abs(pred_total_weight - gt_total_weight)
+        calorie_abs_error_sum += calorie_abs_error
+        weight_abs_error_sum += weight_abs_error
+
+        if gt_total_calories > 0:
+            calorie_abs_pct_error_sum += calorie_abs_error / gt_total_calories
+        if gt_total_weight > 0:
+            weight_abs_pct_error_sum += weight_abs_error / gt_total_weight
+
+        usable_count += 1
+        image_count += 1
+
+    if usable_count == 0:
+        return {
+            "sample_count": 0.0,
+            "calorie_mae": 0.0,
+            "calorie_mape": 0.0,
+            "weight_mae_g": 0.0,
+            "weight_mape": 0.0,
+        }
+
+    return {
+        "sample_count": float(usable_count),
+        "calorie_mae": calorie_abs_error_sum / usable_count,
+        "calorie_mape": calorie_abs_pct_error_sum / usable_count,
+        "weight_mae_g": weight_abs_error_sum / usable_count,
+        "weight_mape": weight_abs_pct_error_sum / usable_count,
+    }
+
+
+def create_eval_template(
+    image_paths: list[str | Path],
+    output_json_path: str | Path,
+) -> Path:
+    rows: list[dict[str, Any]] = []
+    for p in image_paths:
+        path = Path(p)
+        if not path.exists():
+            continue
+        rows.append(
+            {
+                "image_path": str(path),
+                "gt_total_calories": 0.0,
+                "gt_total_weight_g": 0.0,
+                "notes": "fill ground-truth values",
+            }
+        )
+    out_path = Path(output_json_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=2)
+    return out_path

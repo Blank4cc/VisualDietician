@@ -1,4 +1,4 @@
-# VisualDietician (EE5811 Project 6)
+# VisualDietician (Course Project )
 
 This repository is prepared for course project source-code submission.\
 Its goal is to provide a deliverable baseline for food recognition and calorie estimation (Scheme A).

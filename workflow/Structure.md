@@ -1,76 +1,170 @@
-以下是完整的深度分析报告：
+# Project Structure and Constraint Analysis (As Built)
 
-***
-# Phase 1：目标深挖与约束识别
-## 核心产出物（MECE 拆解）
-以下四个产出物相互独立、完全覆盖项目目标 ：
+---
 
-| 产出物 | 内容 | 验收标准 |
+## 1. Goal Decomposition
+
+The current implementation is organized around four independent but complete deliverables:
+
+| Deliverable | Current Output | Current Acceptance Signal |
 |---|---|---|
-| **食物分类器** | 输入图片 → Top-3 食物类别 + 置信度 | Food-101 测试集 Top-1 准确率 ≥ 70% |
-| **份量估算器** | 输入图片 → 食物重量（克） | 与手动称重误差 ≤ ±30% |
-| **营养计算引擎** | 类别 + 重量 → 热量/蛋白质/脂肪/碳水 | 与食品标签比对误差 ≤ ±20% |
-| **可视化报告输出** | 标注图 + 营养饼图 + 宏量素表格 | 可在 Jupyter Notebook 完整展示 |
-> 方案 A 验收口径补充：端到端阶段以“USDA 映射命中率 + 分类精度 + 推理稳定性”为主；逐图 MAE/MAPE 仅在具备真实GT时作为扩展指标。
-## 底层技术栈
-- **图像分类**：PyTorch + ResNet-50（ImageNet 预训练迁移学习），数据集 Food-101（101类，~10万张）
-- **目标检测**：YOLOv8n（COCO 预训练，检测食物边界框）
-- **比例估算**：OpenCV 像素测量 + 参考物体（硬币）做 pixel-to-cm 换算
-- **营养数据（方案 A）**：USDA FoodData Central CSV（本地离线，类别级静态映射到每100g营养）
-- **可视化**：Matplotlib / Plotly，最终封装进 `.ipynb`
-## 关键潜在卡点
-**卡点 1：2D 图像无法精确估算 3D 体积** 
-用平面面积推算重量会有系统误差（碗深、堆叠高度无从得知）。缓解方案：为每类食物建立"标准份量"查找表，当无法精确估算时使用默认值，并在输出中注明 ±30% 的误差区间。
+| Food Classifier | Top-3 labels + confidence per image | Sampled Food-101 Top-1 around `0.78`, Top-3 around `0.91` |
+| Portion Estimator | Estimated item weight (grams) | Stable fallback behavior under detector failure |
+| Nutrition Engine | Calories/protein/fat/carbs from class + weight | Non-zero calorie rate and trusted-rate tracked in batch evaluation |
+| Report Assets | CSV/JSON metrics + dashboard figures | Report figures exported in `outputs/report_figures/` |
 
-**卡点 2：迁移学习在 Colab 免费 GPU 上的训练时长** 
-全量微调 ResNet-50 在 Food-101 上约需 4–8 小时。缓解方案：冻结骨干层，仅训练最后 FC 层（30 分钟内可得 ≥65% 准确率），再选择性解冻最后 2 个 block 做二阶段微调。
+Scheme A remains the active strategy: classify first, then map category to USDA nutrition values per 100g, then scale by estimated weight.
 
-**卡点 3：混合菜肴分类歧义** 
-"蛋炒饭"与"炒饭"视觉特征几乎相同。缓解方案：输出 Top-3 预测，允许用户在 Notebook 中手动确认正确类别；报告中将此列为 Limitation 并分析。
+---
 
-**方案确认（已采用）**  
-本项目采用“方案 A：类别级静态映射”。即：先做 Food-101 分类，再用类别名匹配 USDA CSV 获取每100g营养值，最后乘以估算重量得到总营养。该方案不要求训练集包含逐图卡路里/重量标签，工程复杂度低，适合课程项目交付。
+## 2. Real Constraints and Mitigations
 
-***
-# Phase 2：模块化逻辑架构
-5 个核心模块如下，输入→输出关系如图所示 ：
-| 模块 | 功能 | 输入 | 输出 | 依赖 |
+| Constraint | Implementation Reality | Mitigation Already Implemented |
+|---|---|---|
+| 2D image cannot recover true 3D food volume | Portion estimation uses bbox area approximation | Area sanity bounds + capped weight + deterministic fallback |
+| Low-confidence predictions can generate misleading nutrition totals | Classifier confidence varies across hard classes | Confidence gating in pipeline (`confidence_threshold=0.35`) |
+| Food-101 names do not always match USDA descriptions | Long-tail label mismatch exists | Alias mapping + token overlap + fuzzy match + nutrition fallback profile |
+| YOLO runtime can fail in some setups | Model loading/inference may be unavailable | Lazy YOLO initialization and exception-safe fallback path |
+
+---
+
+## 3. Implemented Module Graph
+
+| Module | Responsibility | Input | Output | Upstream Dependency |
 |---|---|---|---|---|
-| **M1 数据预处理** | Resize/Normalize/增强，参考物检测 | 原始图片 | 224×224 tensor；pixel/cm 比例 | — |
-| **M2 食物分类** | ResNet-50 推理，Top-3 预测 | M1 张量 | `[(label, confidence)]` | M1 |
-| **M3 份量检测** | YOLOv8 边界框 + 面积换算重量 | M1 图片 + 比例 | `{label: weight_g}` | M1 |
-| **M4 营养计算（方案 A）** | 类别映射 USDA 本地 CSV（每100g）并乘以重量 | M2 标签 + M3 重量 | `{calories, protein, fat, carb}` | M2 + M3 |
-| **M5 可视化输出** | 标注图、饼图、宏量表，Notebook 封装 | M3 框 + M4 数据 | 可交互 Jupyter 演示 | M4 |
+| `data_pipeline.py` | Food-101 dataloaders and transforms | Dataset root | Train/val/test loaders | None |
+| `classifier.py` | ResNet-50 classification inference | Image path | Top-k predictions | Data transforms |
+| `portion_estimator.py` | YOLO-based weight estimation with fallbacks | Image path + candidate label(s) | Portion estimation list | Class labels |
+| `nutrition_engine.py` | USDA CSV lookup and nutrient scaling | Label + weight | Nutrition breakdown | USDA CSV files |
+| `pipeline.py` | End-to-end fusion and trust policy | Image path | `top3_classification/items/total/meta` | Classifier + portion + nutrition |
+| `evaluation.py` | Metrics and batch evaluation utilities | Predictor + test images | KPI dictionary + optional CSV/JSON | Pipeline |
+| `visualization.py` | Report-oriented chart export | Scheme A CSV | Dashboard and trade-off figures | Evaluation output |
 
-***
-# Phase 3：动态工作流与里程碑
-## 执行计划
-**Phase 0（Day 1–2）：环境配置** — 全员并行 
-- 配置 Colab GPU，安装 `torch torchvision ultralytics`
-- 下载 Food-101 数据集，注册 USDA API Key
-- 分工：成员 A → 分类，成员 B → 检测，成员 C → 集成报告
+---
 
-**Phase 1（Day 3–5）：数据管道** — 强依赖 Phase 0 
-- 构建 PyTorch `Dataset`，实现 train/val/test 划分
-- 实现预处理 + 数据增强 pipeline，可视化验证
+## 4. Current End-to-End Data Flow
 
-**Phase 2A（Day 6–12）：食物分类** ‖ **Phase 2B（Day 6–12）：份量检测** — 两者并行 
-- 2A：冻结 ResNet-50 骨干 → 训练 FC → 解冻微调 → 保存 checkpoint
-- 2B：集成 YOLOv8 推理 → 构建密度查找表 → 验证重量估算
-
-**Phase 3（Day 13–16）：集成** — 强依赖 2A + 2B 均完成 
-- 编写统一入口函数 `predict_meal(image_path)`
-- 连接 M2→M4（类别级 USDA 映射）、M3→M4（重量乘数）
-- 处理多食物场景（循环 YOLO 检测结果）
-
-**Phase 4（Day 17–21）：评估 + 报告** — 强依赖 Phase 3 
-- 运行全量评估：分类准确率 / 份量误差 / 端到端热量误差（若无真实逐图GT，则使用代理GT做趋势评估）
-- 撰写 4 页 CVPR 格式报告，准备 3 分钟 TED 演讲 demo
-## 依赖关系
 ```
-Phase 0 → Phase 1 → [ Phase 2A ‖ Phase 2B ] → Phase 3 → Phase 4
+image_path
+   |
+   +--> classify with ResNet-50 --> top3 labels + confidences
+   |
+   +--> if top1 confidence < threshold and block enabled:
+   |       return zero-nutrition output with trust metadata
+   |
+   +--> estimate portion (YOLO or fallback default weight)
+   |
+   +--> map label to USDA nutrition per 100g
+   |
+   +--> scale nutrients by estimated grams
+   |
+   +--> return items + totals + trust metadata
 ```
 
-可并行：Phase 2A 与 Phase 2B 完全独立，适合两名成员同时开工。第三名成员在 Phase 2 期间可提前准备报告框架和 USDA 营养数据库。
+---
 
-工作流可视化文件已生成为可下载的 Markdown 文档，供团队成员或其他 AI 工具直接读取使用。
+## 5. Current Milestone State
+
+- Environment and dependency pinning completed.
+- Data pipeline module completed.
+- Two-stage classifier training pipeline completed.
+- Portion estimation module with fallback completed.
+- Scheme A nutrition integration completed.
+- Batch evaluation and report-figure export completed.
+- Final CVPR-style report writing remains open.
+
+---
+
+## 6. Evidence Files in Repository
+
+- Main notebook: `main.ipynb`
+- Core package: `src/food_cv/`
+- Batch outputs:
+  - `outputs/scheme_a_test_results.csv`
+  - `outputs/scheme_a_test_results.json`
+- Report figures:
+  - `outputs/report_figures/report_dashboard.png`
+  - `outputs/report_figures/report_confidence_tradeoff.png`
+- Engineering log:
+  - `dev_ledger.md`
+
+---
+
+## 7. Recommended Final Validation Before Submission
+
+1. Re-run Scheme A batch evaluation with fixed seed and stratified sampling.
+2. Regenerate report figures from latest CSV.
+3. Validate notebook output consistency after kernel restart.
+4. Freeze final KPI table and copy into the CVPR report.
+
+---
+*This file is updated to reflect actual implementation status rather than initial planning assumptions.*
+
+---
+
+## 8. ASCII Architecture Diagram (As Built)
+
+```text
+                                +----------------------+
+                                |      main.ipynb      |
+                                |  (orchestration)     |
+                                +----------+-----------+
+                                           |
+                                           v
+                         +-----------------+-----------------+
+                         | src/food_cv/config.py             |
+                         | ProjectPaths (data/model paths)   |
+                         +-----------------+-----------------+
+                                           |
+                                           v
+                    +----------------------+----------------------+
+                    | src/food_cv/data_pipeline.py              |
+                    | Food101DataModule + transforms            |
+                    +----------------------+----------------------+
+                                           |
+                         train/val/test loaders + class names
+                                           |
+                                           v
+      +------------------------------------+------------------------------------+
+      | src/food_cv/training.py                                                 |
+      | train_classifier_two_stage (stage1 frozen -> stage2 partial unfreeze)  |
+      +------------------------------------+------------------------------------+
+                                           |
+                                           v
+                 +-------------------------+-------------------------+
+                 | models/*.pt + class_names.json                   |
+                 +-------------------------+-------------------------+
+                                           |
+                                           v
+                   +-----------------------+-----------------------+
+                   | src/food_cv/pipeline.py                       |
+                   | MealPredictor.predict_meal(image_path)        |
+                   +-----------------------+-----------------------+
+                                           |
+          +--------------------------------+---------------------------------+
+          |                                |                                 |
+          v                                v                                 v
++---------------------------+  +----------------------------+  +-------------------------------+
+| classifier.py             |  | portion_estimator.py       |  | nutrition_engine.py           |
+| ResNet-50 Top-3           |  | YOLOv8 / fallback weight   |  | USDA CSV mapping + fallback   |
+| + confidence              |  | estimate from bbox area     |  | per-100g -> scaled nutrients  |
++-------------+-------------+  +--------------+-------------+  +---------------+---------------+
+              |                               |                                |
+              +---------------+---------------+--------------------------------+
+                              |
+                              v
+                 +------------+-----------------------------------+
+                 | Inference output dict                          |
+                 | top3_classification / items / total / meta     |
+                 +------------+-----------------------------------+
+                              |
+                              v
+          +-------------------+-------------------+---------------------------+
+          |                                       |                           |
+          v                                       v                           v
++---------------------------+      +----------------------------+  +-----------------------------+
+| evaluation.py             |      | visualization.py           |  | outputs/                    |
+| batch metrics + CSV/JSON  | ---> | report figures export      |  | scheme_a_test_results.*     |
+| stratified sampling       |      | dashboard + tradeoff plots |  | report_figures/*.png        |
++---------------------------+      +----------------------------+  +-----------------------------+
+```

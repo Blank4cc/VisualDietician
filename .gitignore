@@ -31,3 +31,10 @@ Thumbs.db
 desktop.ini
 .DS_Store
 midway_report.md
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+CVPR_Report_Text_Draft.md
+CVPR_4Page_Report_Structure.md

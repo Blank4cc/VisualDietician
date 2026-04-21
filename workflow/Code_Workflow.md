@@ -1,5 +1,5 @@
-# 🍱 EE5811 Project 6: Food Recognition & Calorie Estimation
-## AI-Readable Project Workflow
+# EE5811 Project 6: Food Recognition and Calorie Estimation
+## AI-Readable As-Built Workflow (Updated to Current Implementation)
 
 ---
 
@@ -8,249 +8,134 @@
 | Field | Detail |
 |---|---|
 | Course | EE5811 Topics in Computer Vision |
-| Topic | Food Image Recognition + Calorie Estimation |
-| Stack | Python · PyTorch · OpenCV · YOLO · Food-101 · USDA CSV · pandas |
-| Team Size | 2–3 persons recommended |
-| Duration | ~8 weeks |
+| Project Codename | VisualDietician |
+| Objective | Food-101 classification + portion estimation + USDA nutrition fusion |
+| Main Entry | `main.ipynb` |
+| Core Source | `src/food_cv/` |
+| Strategy | Scheme A (classification-first + static USDA mapping) |
+| Status | Deliverable-grade baseline completed |
 
 ---
 
-## MODULE ARCHITECTURE
+## CURRENT TECH STACK (IMPLEMENTED)
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        INPUT LAYER                                  │
-│             [Single food photo / meal photo]                        │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  MODULE 1: Data & Preprocessing                                     │
-│  • Resize → 224×224 (ResNet input norm)                             │
-│  • Normalize (ImageNet mean/std)                                    │
-│  • Augmentation: flip, crop, color jitter (training only)           │
-│  • Reference object detection (coin/hand for scale)                 │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-          ┌───────────┴───────────┐
-          ▼                       ▼
-┌─────────────────┐     ┌─────────────────────────────┐
-│  MODULE 2:      │     │  MODULE 3:                  │
-│  Food           │     │  Portion / Size Detection   │
-│  Classification │     │                             │
-│                 │     │  • YOLOv8 (fine-tuned)      │
-│  • ResNet-50    │     │    detect food bounding box │
-│    pretrained   │     │  • Reference object scale   │
-│    fine-tuned   │     │    → pixel-to-cm mapping    │
-│    on Food-101  │     │  • Estimate 2D area → mass  │
-│                 │     │    (density lookup table)   │
-│  OUTPUT:        │     │                             │
-│  Top-3 food     │     │  OUTPUT:                    │
-│  categories +   │     │  Estimated weight (grams)   │
-│  confidence     │     │  per detected food item     │
-└────────┬────────┘     └────────────┬────────────────┘
-         │                           │
-         └──────────┬────────────────┘
-                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  MODULE 4: Nutrition Calculation Engine                             │
-│                                                                     │
-│  food_category + estimated_weight                                   │
-│       │                                                             │
-│       ├─→ USDA FoodData Central CSV (offline, 本地文件, 方案A)         │
-│       │   food.csv + food_nutrient.csv + nutrient.csv               │
-│       │   启动时一次性 pd.read_csv() 加载到内存                         │
-│       │   + Food-101 类别静态映射规则（优先）                          │
-│       │                                                             │
-│       └─→ calories = (cal_per_100g / 100) × weight_g                  │
-│           + protein_g, fat_g, carb_g                                │
-│                                                                     │
-│  OUTPUT: Nutritional breakdown dict per food item                   │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  MODULE 5: Presentation / Report Layer                              │
-│                                                                     │
-│  • Annotated image: bounding boxes + label + calorie overlay        │
-│  • Pie chart: calorie breakdown by food item                        │
-│  • Macro table: protein / fat / carb / total calories              │
-│  • Jupyter Notebook demo (course submission requirement)            │
-└─────────────────────────────────────────────────────────────────────┘
-```
+- Python, PyTorch, torchvision
+- Ultralytics YOLOv8 (pretrained model inference)
+- pandas, Pillow, OpenCV, matplotlib
+- Food-101 dataset
+- USDA FoodData Central CSV (Foundation + optional SR Legacy)
+- Accelerator fallback: DirectML (Windows), CUDA/MPS, CPU fallback
+
+Pinned package versions are tracked in `requirements.txt`.
 
 ---
 
-## EXECUTION PHASES
-
-### PHASE 0 — Environment Setup (Day 1–2)
-**Can be done in parallel by all members.**
-
-- [ ] Setup Google Colab environment + GPU runtime
-- [ ] Install: `torch torchvision ultralytics pandas Pillow`
-- [ ] Download USDA CSV from fdc.nal.usda.gov/download-datasets
-      → Foundation Foods (~29MB) + SR Legacy (~54MB) 解压到 data/usda/
-- [ ] Download Food-101 dataset (~5GB, ~101k images)
-- [ ] Register USDA FoodData Central API key (free)
-- [ ] Split team roles: Member A → Classification, Member B → Detection, Member C → Integration
-
----
-
-### PHASE 1 — Data Pipeline (Day 3–5)
-**Dependency: Phase 0 complete**
-
-```
-[Food-101 Dataset]
-      │
-      ├─ train/val/test split (75/15/10)
-      ├─ DataLoader with augmentation
-      └─ Baseline: random guess accuracy = 1/101 ≈ 0.99%
-         Target: fine-tuned accuracy ≥ 70%
-```
-
-- [ ] Build PyTorch Dataset class for Food-101
-- [ ] Implement preprocessing pipeline
-- [ ] Verify data loading with sample visualization
-
----
-
-### PHASE 2A — Food Classification (Day 6–12) [PARALLEL with 2B]
-**Dependency: Phase 1**
-**Owner: Member A**
-
-```
-ResNet-50 (pretrained ImageNet)
-  │
-  ├─ Freeze backbone layers (first run)
-  ├─ Replace final FC layer: 2048 → 101 classes
-  ├─ Train with:
-  │    optimizer = Adam(lr=1e-4)
-  │    loss = CrossEntropyLoss
-  │    epochs = 10–20
-  │    batch_size = 32
-  └─ Fine-tune (unfreeze last 2 blocks, lr=1e-5)
-
-Evaluation:
-  Top-1 Accuracy | Top-5 Accuracy | Confusion Matrix
-```
-
-- [ ] Implement transfer learning script
-- [ ] Run training on Colab GPU (~2–4 hours)
-- [ ] Save best model checkpoint
-- [ ] Evaluate on test set, visualize top errors
-
----
-
-### PHASE 2B — Portion Detection (Day 6–12) [PARALLEL with 2A]
-**Dependency: Phase 1**
-**Owner: Member B**
-
-```
-YOLOv8n (nano, fast)
-  │
-  ├─ Use pretrained COCO weights (no fine-tuning needed for demo)
-  ├─ Detect food regions → bounding box (x, y, w, h)
-  ├─ Reference object: standard coin (2.5cm diameter)
-  │    pixel_per_cm = coin_pixel_width / 2.5
-  ├─ Estimate food area = (bbox_w / ppc) × (bbox_h / ppc) cm²
-  └─ Lookup density table → weight estimate (grams)
-
-KNOWN LIMITATION: 2D area ≠ 3D volume → add ±30% error disclaimer
-```
-
-- [ ] Integrate YOLOv8 inference pipeline
-- [ ] Build density lookup table (top 20 Food-101 categories)
-- [ ] Validate against known portion sizes
-- [ ] Handle "no reference object" fallback (use default portion size)
-
----
-
-### PHASE 3 — Integration (Day 13–16)
-**Dependency: Phase 2A AND Phase 2B both complete**
-**Owner: Member C (with A & B review)**
+## MODULE ARCHITECTURE (AS BUILT)
 
 ```
 Input Image
     │
-    ├──[Module 2]──→ food_label (str), confidence (float)
-    ├──[Module 3]──→ weight_estimate (float, grams)
+    ├── Module A: Food Classification (`classifier.py`)
+    │     - ResNet-50 transfer learning (ImageNet pretrained)
+    │     - Top-3 predictions with confidence
     │
-    └──[Module 4]──→ query nutrition DB
-                     → pd.DataFrame 本地查询 (food_nutrient.csv)
-                     → 方案A: Food-101 类别静态映射 → fdc_id → nutrients
-                     → {calories, protein, fat, carbs}
-                     → render annotated output image
+    ├── Module B: Portion Estimation (`portion_estimator.py`)
+    │     - YOLOv8n detection (lazy-loaded; fault-tolerant)
+    │     - 2D bbox area -> estimated weight via density lookup
+    │     - Default fallback weight when detection is unavailable
+    │
+    ├── Module C: Nutrition Engine (`nutrition_engine.py`)
+    │     - Food-101 label -> USDA lookup (alias + token overlap + fuzzy)
+    │     - Per-100g nutrient extraction and weight scaling
+    │     - Nutrition fallback profile for unresolved labels
+    │
+    └── Module D: Pipeline Fusion (`pipeline.py`)
+          - `MealPredictor.predict_meal(image_path)`
+          - Confidence gating (`confidence_threshold=0.35`)
+          - Optional nutrition block on low-confidence predictions
+          - Structured output: `top3_classification`, `items`, `total`, `meta`
 ```
-
-- [ ] Write `predict_meal(image_path)` unified function
-- [ ] Connect classification output → nutrition lookup
-- [ ] Connect detection output → weight multiplier
-- [ ] Handle multi-item meals (loop over YOLO detections)
 
 ---
 
-### PHASE 4 — Evaluation & Report (Day 17–21)
-**Dependency: Phase 3**
+## SUPPORTING MODULES
 
-| Evaluation Dimension | Method |
+| Module | Implemented Functions |
 |---|---|
-| Classification accuracy | Top-1 / Top-5 on Food-101 test set |
-| Portion estimation error | Compare vs. manual weighing (5–10 test images) |
-| Nutrition hit-rate (Scheme A primary) | Ratio of predicted items with non-zero calories after USDA mapping |
-| End-to-end calorie error (optional) | Compare vs. measured GT if available; otherwise proxy GT trend only |
-| Speed | Inference time per image (ms) |
-
-- [ ] Run full evaluation suite
-- [ ] Write 4-page CVPR-format report
-- [ ] Prepare 3-min TED-style presentation demo
-- [ ] Submit: `.ipynb` notebook + report PDF
+| `data_pipeline.py` | Food-101 dataloaders, train/eval transforms, train/val split |
+| `training.py` | One-stage and two-stage training, effective-epoch guard, backend fallback |
+| `evaluation.py` | Classification metrics, stratified Food-101 sampling, Scheme A batch test, JSON-based E2E evaluation |
+| `visualization.py` | Report dashboard, confidence trade-off plot, optional class detail plot |
 
 ---
 
-## DEPENDENCY GRAPH
+## EXECUTION FLOW (CURRENT NOTEBOOK FLOW)
 
-```
-Phase 0 (Setup)
-    │
-    └──→ Phase 1 (Data Pipeline)
-              │
-    ┌─────────┴──────────┐
-    ▼                    ▼
-Phase 2A              Phase 2B
-(Classification)      (Detection)
-    │                    │
-    └─────────┬──────────┘
-              ▼
-         Phase 3 (Integration)
-              │
-              ▼
-         Phase 4 (Eval + Report)
-```
-
-**Parallelizable:** Phase 2A ‖ Phase 2B
-**Hard Dependencies:** 0→1→{2A,2B}→3→4
+1. Build paths and datasets via `ProjectPaths` and `Food101DataModule`.
+2. Train classifier in two stages (frozen backbone -> unfreeze last blocks) or reuse existing checkpoint.
+3. Run test evaluation (Top-1/Top-5/loss).
+4. Build `MealPredictor` with checkpoint + USDA CSV.
+5. Run Scheme A batch test on stratified Food-101 samples.
+6. Export report figures from batch CSV.
 
 ---
 
-## POTENTIAL BLOCKERS & MITIGATIONS
+## IMPLEMENTED TRAINING PROFILE
 
-| # | Blocker | Mitigation |
+- Stage 1: 3 epochs, LR `1e-4`
+- Stage 2: 5 epochs, LR `3e-5`
+- Guardrail: minimum effective epoch coverage check enabled by default
+- Checkpoints:
+  - `models/food101_resnet50_stage1.pt`
+  - `models/food101_resnet50_stage2.pt`
+  - `models/class_names.json`
+
+---
+
+## LATEST CONFIRMED KPI SNAPSHOT
+
+From current project records (`dev_ledger.md` and `outputs/scheme_a_test_results.*`):
+
+- Classification (sampled):
+  - Top-1: `0.7802`
+  - Top-3: `0.9069`
+  - Top-5 (quick eval): `0.9469`
+- Nutrition robustness:
+  - Non-zero total calorie rate: `0.8337`
+  - Trusted non-zero total calorie rate: `0.8367`
+- Reliability:
+  - Low-confidence rate (`conf < 0.35`): `0.2238`
+
+---
+
+## OUTPUT ARTIFACTS (CURRENT REPO)
+
+- `outputs/scheme_a_test_results.csv`
+- `outputs/scheme_a_test_results.json`
+- `outputs/report_figures/report_dashboard.png`
+- `outputs/report_figures/report_confidence_tradeoff.png`
+
+---
+
+## KNOWN LIMITATIONS (CURRENT)
+
+| # | Limitation | Current Mitigation |
 |---|---|---|
-| 1 | **Portion estimation without depth** — 2D image can't give true 3D volume | Use standard portion size as fallback; add confidence interval in output |
-| 2 | **Food-101 fine-tuning overfitting** — small compute budget | Use transfer learning (freeze backbone), data augmentation, early stopping |
-| 3 | **Mixed-dish ambiguity** — "fried rice" vs "egg fried rice" look identical | Report Top-3 predictions; let user confirm via simple UI toggle |
-| 4 | **Food-101 类名与 USDA 描述不匹配** — 如 "edamame" vs "Edamame, frozen, prepared" | 
-    持续扩展 Food-101→USDA 静态映射表（优先覆盖高频类别，长尾逐步补齐） |
+| 1 | 2D area does not capture true 3D volume for portion estimation | Default weight fallback + bounded area filters + disclaimer in reporting |
+| 2 | Label ambiguity for visually similar classes | Top-3 output + confidence-aware trust policy |
+| 3 | Food-101 to USDA mismatch for long-tail classes | Alias table + token/fuzzy matching + fallback nutrition profiles |
+| 4 | Detection/runtime instability in some environments | YOLO lazy initialization + exception-safe fallback path |
 
 ---
 
-## DELIVERABLES CHECKLIST
+## DELIVERABLE CHECKLIST (AS BUILT)
 
-- [ ] `food_classifier.ipynb` — training + evaluation notebook
-- [ ] `portion_detector.ipynb` — YOLO detection demo
-- [ ] `calorie_estimator.ipynb` — end-to-end unified demo
-- [ ] `report.pdf` — 4-page CVPR format
-- [ ] `slides.pptx` — 3-min TED presentation
+- [x] Unified notebook entry (`main.ipynb`)
+- [x] Modular source package (`src/food_cv`)
+- [x] Scheme A batch evaluation export (CSV + JSON)
+- [x] Report-ready figures for 4-page paper
+- [ ] Final CVPR-style report PDF
+- [ ] Final presentation slides
 
 ---
-*Generated for EE5811 Project Planning | CityU HK*
+*Updated to match repository implementation state.*

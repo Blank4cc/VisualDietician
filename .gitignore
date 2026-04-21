@@ -38,3 +38,5 @@ midway_report.md
 *.bmp
 CVPR_Report_Text_Draft.md
 CVPR_4Page_Report_Structure.md
+.idea/
+.trae/

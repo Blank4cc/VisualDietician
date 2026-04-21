@@ -62,7 +62,7 @@ Food-101 official dataset page:\
 
 ## 6. Submission Notes
 
-- Included in this repository: source code, documentation, sample evaluation outputs, and report figures
-- Not included: raw Food-101 dataset (excluded due to size)
+- Included in this repository: source code, documentation, sample evaluation outputs
+- Not included: raw Food-101 dataset (excluded due to size), and report figures(included in the report pdf)
 - For full reproducibility, download datasets from the links above before running the notebook
 

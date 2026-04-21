@@ -117,6 +117,10 @@ class USDANutritionEngine:
             "pizza": NutritionBreakdown(266.0, 11.0, 10.0, 33.0),
             "ice cream": NutritionBreakdown(207.0, 3.5, 11.0, 24.0),
             "french fries": NutritionBreakdown(312.0, 3.4, 15.0, 41.0),
+            "croque madame": NutritionBreakdown(271.0, 12.0, 15.0, 21.0),
+            "risotto": NutritionBreakdown(166.0, 4.0, 6.0, 24.0),
+            "huevos rancheros": NutritionBreakdown(156.0, 8.0, 8.0, 13.0),
+            "prime rib": NutritionBreakdown(355.0, 24.0, 28.0, 0.0),
         }
         self._load()
 
@@ -269,6 +273,11 @@ class USDANutritionEngine:
             values = subset.loc[subset["nutrient_id"] == nutrient_id, "amount"]
             if not values.empty:
                 per_100g[field] = float(values.iloc[0])
+
+        if per_100g["calories"] <= 0.0:
+            fallback = self._fallback_nutrition_for(food_name, weight_g)
+            if fallback is not None:
+                return fallback
 
         scale = weight_g / 100.0
         return NutritionBreakdown(

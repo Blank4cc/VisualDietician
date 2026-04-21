@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-
-from ultralytics import YOLO
+from typing import Any
 
 from .schemas import PortionEstimation
 
@@ -17,6 +16,9 @@ class PortionConfig:
     min_detection_confidence: float = 0.35
     max_items: int = 3
     max_weight_g_per_item: float = 800.0
+    single_item_mode: bool = True
+    min_bbox_area_cm2: float = 1.0
+    max_bbox_area_cm2: float = 1500.0
 
 
 DEFAULT_DENSITY_G_PER_CM2: dict[str, float] = {
@@ -40,9 +42,24 @@ class PortionEstimator:
         config: PortionConfig | None = None,
         density_map: dict[str, float] | None = None,
     ) -> None:
-        self.model = YOLO(yolo_model_name)
+        self.model: Any | None = None
+        try:
+            from ultralytics import YOLO  # Lazy import for better fault tolerance.
+
+            self.model = YOLO(yolo_model_name)
+        except Exception:
+            self.model = None
         self.config = config or PortionConfig()
         self.density_map = density_map or DEFAULT_DENSITY_G_PER_CM2
+
+    def _fallback(self, label: str) -> list[PortionEstimation]:
+        return [
+            PortionEstimation(
+                label=label,
+                weight_g=self.config.default_weight_g,
+                confidence=self.config.fallback_confidence,
+            )
+        ]
 
     def estimate(
         self,
@@ -58,29 +75,29 @@ class PortionEstimator:
             candidates = ["unknown_food"]
         if pixel_per_cm is not None and pixel_per_cm <= 0:
             raise ValueError("pixel_per_cm 必须大于 0")
+        if self.config.min_bbox_area_cm2 <= 0:
+            raise ValueError("min_bbox_area_cm2 必须大于 0")
+        if self.config.max_bbox_area_cm2 <= self.config.min_bbox_area_cm2:
+            raise ValueError("max_bbox_area_cm2 必须大于 min_bbox_area_cm2")
 
-        results = self.model.predict(source=str(path), verbose=False)
+        primary_label = candidates[0]
+        if self.model is None:
+            return self._fallback(primary_label)
+
+        try:
+            results = self.model.predict(source=str(path), verbose=False)
+        except Exception:
+            return self._fallback(primary_label)
         if not results:
-            return [
-                PortionEstimation(
-                    label=candidates[0],
-                    weight_g=self.config.default_weight_g,
-                    confidence=self.config.fallback_confidence,
-                )
-            ]
+            return self._fallback(primary_label)
 
         boxes = results[0].boxes
         if boxes is None or boxes.xyxy is None or len(boxes.xyxy) == 0:
-            return [
-                PortionEstimation(
-                    label=candidates[0],
-                    weight_g=self.config.default_weight_g,
-                    confidence=self.config.fallback_confidence,
-                )
-            ]
+            return self._fallback(primary_label)
 
         ppc = pixel_per_cm if pixel_per_cm else 40.0
         estimations: list[PortionEstimation] = []
+        max_items = 1 if self.config.single_item_mode else self.config.max_items
         for idx, xyxy in enumerate(boxes.xyxy.tolist()):
             confidence = float(boxes.conf[idx].item()) if boxes.conf is not None else self.config.fallback_confidence
             if confidence < self.config.min_detection_confidence:
@@ -89,6 +106,8 @@ class PortionEstimator:
             bbox_w = max(x2 - x1, 1.0)
             bbox_h = max(y2 - y1, 1.0)
             area_cm2 = (bbox_w / ppc) * (bbox_h / ppc)
+            if area_cm2 < self.config.min_bbox_area_cm2 or area_cm2 > self.config.max_bbox_area_cm2:
+                continue
             label = candidates[min(idx, len(candidates) - 1)]
             density = self.density_map.get(label, 1.2)
             estimated_weight = max(area_cm2 * density, 1.0)
@@ -100,14 +119,8 @@ class PortionEstimator:
                     confidence=confidence,
                 )
             )
-            if len(estimations) >= self.config.max_items:
+            if len(estimations) >= max_items:
                 break
         if not estimations:
-            return [
-                PortionEstimation(
-                    label=candidates[0],
-                    weight_g=self.config.default_weight_g,
-                    confidence=self.config.fallback_confidence,
-                )
-            ]
+            return self._fallback(primary_label)
         return estimations

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -26,6 +27,15 @@ class TrainConfig:
     use_amp: bool = True
     require_accelerator: bool = False
     optimizer_foreach: bool | None = None
+    optimizer: str = "adamw"  # adamw | adam
+    weight_decay: float = 1e-4
+    label_smoothing: float = 0.0
+    grad_clip_norm: float | None = 1.0
+    lr_schedule: str = "cosine"  # cosine | none
+    warmup_epochs: int = 1
+    min_lr_ratio: float = 0.1
+    min_effective_epochs: float = 1.0
+    enforce_min_effective_epochs: bool = True
 
 
 def _resolve_device(device: str) -> tuple[Any, str]:
@@ -55,6 +65,7 @@ def train_one_epoch(
     log_every_n_steps: int = 50,
     max_steps_per_epoch: int | None = None,
     use_amp: bool = True,
+    grad_clip_norm: float | None = None,
 ) -> float:
     model.train()
     running_loss = 0.0
@@ -88,15 +99,22 @@ def train_one_epoch(
                 loss = criterion(logits, y)
             if scaler is None:
                 loss.backward()
+                if grad_clip_norm is not None and grad_clip_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
                 optimizer.step()
             else:
                 scaler.scale(loss).backward()
+                if grad_clip_norm is not None and grad_clip_norm > 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
                 scaler.step(optimizer)
                 scaler.update()
         else:
             logits = model(x)
             loss = criterion(logits, y)
             loss.backward()
+            if grad_clip_norm is not None and grad_clip_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
             optimizer.step()
         batch_size = x.size(0)
         running_loss += float(loss.item()) * batch_size
@@ -114,6 +132,32 @@ def train_one_epoch(
         if max_steps_per_epoch is not None and max_steps_per_epoch > 0 and step >= max_steps_per_epoch:
             break
     return running_loss / max(total, 1)
+
+
+def _compute_epoch_lr(cfg: TrainConfig, epoch: int) -> float:
+    """Compute epoch-level learning rate with optional warmup and cosine decay."""
+    if epoch <= 0:
+        raise ValueError("epoch 必须从 1 开始")
+    if cfg.lr_schedule.lower() == "none":
+        return cfg.lr
+
+    warmup_epochs = max(int(cfg.warmup_epochs), 0)
+    if warmup_epochs > 0 and epoch <= warmup_epochs:
+        return cfg.lr * (epoch / warmup_epochs)
+
+    if cfg.epochs <= warmup_epochs:
+        return cfg.lr
+
+    progress = (epoch - warmup_epochs) / max(cfg.epochs - warmup_epochs, 1)
+    progress = min(max(progress, 0.0), 1.0)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    floor = min(max(cfg.min_lr_ratio, 0.0), 1.0)
+    return cfg.lr * (floor + (1.0 - floor) * cosine)
+
+
+def _set_optimizer_lr(optimizer: Optimizer, lr: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = lr
 
 
 def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
@@ -169,27 +213,78 @@ def train_classifier(
         raise ValueError("lr 必须大于 0")
     if cfg.log_every_n_steps < 0:
         raise ValueError("log_every_n_steps 不能小于 0")
+    if cfg.weight_decay < 0:
+        raise ValueError("weight_decay 不能小于 0")
+    if not (0.0 <= cfg.label_smoothing < 1.0):
+        raise ValueError("label_smoothing 必须在 [0, 1) 之间")
+    if cfg.grad_clip_norm is not None and cfg.grad_clip_norm <= 0:
+        raise ValueError("grad_clip_norm 必须大于 0，或设置为 None")
+    if cfg.lr_schedule.lower() not in {"cosine", "none"}:
+        raise ValueError("lr_schedule 仅支持 'cosine' 或 'none'")
+    if cfg.warmup_epochs < 0:
+        raise ValueError("warmup_epochs 不能小于 0")
+    if not (0.0 <= cfg.min_lr_ratio <= 1.0):
+        raise ValueError("min_lr_ratio 必须在 [0, 1] 之间")
+    if cfg.min_effective_epochs <= 0:
+        raise ValueError("min_effective_epochs 必须大于 0")
 
     device, backend = _resolve_device(cfg.device)
     if cfg.require_accelerator and backend == "cpu":
         raise RuntimeError("未检测到可用加速后端（CUDA/MPS/DirectML），训练被中止")
     _emit(f"[train] backend={backend} device={device}")
     model.to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=cfg.label_smoothing)
     foreach = cfg.optimizer_foreach
     if foreach is None:
         foreach = backend != "directml"
-    optimizer = torch.optim.Adam(
-        (p for p in model.parameters() if p.requires_grad),
-        lr=cfg.lr,
-        foreach=foreach,
+    params = [p for p in model.parameters() if p.requires_grad]
+    if not params:
+        raise RuntimeError("没有可训练参数，请检查模型冻结逻辑")
+
+    full_steps_per_epoch = max(len(train_loader), 1)
+    effective_steps_per_epoch = (
+        min(full_steps_per_epoch, cfg.max_steps_per_epoch)
+        if cfg.max_steps_per_epoch is not None and cfg.max_steps_per_epoch > 0
+        else full_steps_per_epoch
     )
+    total_effective_epochs = (effective_steps_per_epoch * cfg.epochs) / full_steps_per_epoch
+    if total_effective_epochs < cfg.min_effective_epochs:
+        msg = (
+            f"训练覆盖率过低: effective_epochs={total_effective_epochs:.3f} "
+            f"(epochs={cfg.epochs}, full_steps_per_epoch={full_steps_per_epoch}, "
+            f"effective_steps_per_epoch={effective_steps_per_epoch})，"
+            f"建议 >= {cfg.min_effective_epochs:.3f}"
+        )
+        if cfg.enforce_min_effective_epochs:
+            raise RuntimeError(msg)
+        _emit(f"[train][warn] {msg}")
+    opt_name = cfg.optimizer.lower().strip()
+    if opt_name == "adamw":
+        optimizer = torch.optim.AdamW(
+            params,
+            lr=cfg.lr,
+            weight_decay=cfg.weight_decay,
+            foreach=foreach,
+        )
+    elif opt_name == "adam":
+        optimizer = torch.optim.Adam(
+            params,
+            lr=cfg.lr,
+            weight_decay=cfg.weight_decay,
+            foreach=foreach,
+        )
+    else:
+        raise ValueError("optimizer 仅支持 'adamw' 或 'adam'")
     best_acc = 0.0
     best_top5 = 0.0
     best_loss = float("inf")
+    best_epoch = 0
 
     for epoch in range(1, cfg.epochs + 1):
+        current_lr = _compute_epoch_lr(cfg, epoch)
+        _set_optimizer_lr(optimizer, current_lr)
         _emit(f"[train] epoch={epoch}/{cfg.epochs} start")
+        _emit(f"[train] lr={current_lr:.7f}")
         train_loss = train_one_epoch(
             model,
             train_loader,
@@ -200,6 +295,7 @@ def train_classifier(
             log_every_n_steps=cfg.log_every_n_steps,
             max_steps_per_epoch=cfg.max_steps_per_epoch,
             use_amp=cfg.use_amp,
+            grad_clip_norm=cfg.grad_clip_norm,
         )
         try:
             val_acc = evaluate_accuracy(model, val_loader, device)
@@ -215,16 +311,24 @@ def train_classifier(
             val_top5 = evaluate_topk_accuracy(model, val_loader, device, k=5)
         _emit(
             f"[train] epoch={epoch}/{cfg.epochs} done "
-            f"train_loss={train_loss:.4f} val_top1={val_acc:.4f} val_top5={val_top5:.4f}"
+            f"train_loss={train_loss:.4f} val_top1={val_acc:.4f} val_top5={val_top5:.4f} lr={current_lr:.7f}"
         )
         if val_acc >= best_acc:
             best_acc = val_acc
             best_top5 = val_top5
             best_loss = min(best_loss, train_loss)
+            best_epoch = epoch
             path = Path(save_path)
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(
-                {"model_state_dict": model.state_dict(), "val_top1": val_acc, "val_top5": val_top5},
+                {
+                    "model_state_dict": model.state_dict(),
+                    "val_top1": val_acc,
+                    "val_top5": val_top5,
+                    "epoch": epoch,
+                    "lr": current_lr,
+                    "optimizer": cfg.optimizer,
+                },
                 path,
             )
 
@@ -232,6 +336,7 @@ def train_classifier(
         "best_val_top1": best_acc,
         "best_val_top5": best_top5,
         "best_train_loss": best_loss,
+        "best_epoch": float(best_epoch),
         "backend": backend,
     }
 
